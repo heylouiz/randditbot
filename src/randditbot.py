@@ -98,7 +98,7 @@ def help_command(bot, update):
               "If you want more links from the previous request, use the command \"/more\".\n\n" +\
               "If you find any bugs or want to make a feature request just send me a message!\n" +\
               "Developer: @heylouiz\n" +\
-              "Source code: https://github.com/heylouiz/radditbot.git"
+              "Source code: https://github.com/heylouiz/randditbot.git"
     bot.sendMessage(update.message.chat_id, text=message)
 
 
