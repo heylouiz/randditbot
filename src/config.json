@@ -1,0 +1,8 @@
+{
+ "telegram_token": "",
+ "botan_token": "",
+ "requests_header": { 
+                 "User-Agent": "@name_of_the_bot Telegram bot (by /u/reddit_username)"
+               }
+}
+
