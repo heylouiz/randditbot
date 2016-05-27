@@ -7,18 +7,15 @@
     Author: Luiz Francisco Rodrigues da Silva <luizfrdasilva@gmail.com>
 """
 
-import sys
-
 import json
 import logging
 import random
 import requests
-from telegram import Updater
-from telegram.dispatcher import run_async
 
-# Use botan to bot analytics
-sys.path.insert(0, 'botan/sdk')
-import botan # pylint: disable=import-error
+from telegram.ext import Updater
+from telegram.ext.dispatcher import run_async
+from telegram.ext import CommandHandler, RegexHandler
+from telegram.utils.botan import Botan
 
 # Enable logging
 logging.basicConfig(
@@ -29,8 +26,6 @@ LOGGER = logging.getLogger(__name__)
 
 BASE_URL = 'http://www.reddit.com'
 PAGES = 4
-
-last_request = {} #pylint: disable=invalid-name
 
 # Read configuration from the config file.
 # It also contains the header used in requests.get
@@ -43,38 +38,38 @@ with open('config.json') as config_file:
     CONFIGURATION = json.load(config_file)
 
 @run_async
-def random_post(bot, update, **kwargs): # pylint: disable=unused-argument
+def random_post(bot, update, last_request):
     """ Get a random post from a givem subreddit """
-
-    global last_request # pylint: disable=global-variable-not-assigned,invalid-name
 
     request = update.message.text.split(" ")[0]
 
     if request.find("/more") >= 0:
         try:
             request = last_request[update.message.from_user.id]
-        except KeyError as e: # pylint: disable=invalid-name
-            print(e)
-            bot.sendMessage(update.message.chat_id, text="Failed to send more posts, please"
-                                                         " make a new request.")
+        except KeyError:
+            bot.send_message(update.message.chat_id, text="Failed to send more posts, please"
+                                                          " make a new request.")
             return
 
     url = BASE_URL + request + '.json?count=25&after='
 
+    # Open requests session to improve speed
+    req = requests.Session()
+
     try:
-        posts = []
+        posts = list()
         after = ""
         # Get links from N pages
         for _ in range(PAGES):
-            r = requests.get(url=url + after, headers=CONFIGURATION["requests_header"]) # pylint: disable=invalid-name
+            r = req.get(url=url + after, headers=CONFIGURATION["requests_header"]) # pylint: disable=invalid-name
             posts += [{"title": post["data"]["title"], "url": post["data"]["url"]}
                       for post in r.json()["data"]["children"]]
             after = r.json()["data"]["after"]
             if after is None:
                 break
-    except (requests.exceptions.RequestException, KeyError) as e: # pylint: disable=invalid-name
-        bot.sendMessage(update.message.chat_id, text="Failed to send link, make sure the"
-                                                     " subreddit you requested exist!")
+    except (requests.exceptions.RequestException, KeyError):
+        bot.send_message(update.message.chat_id, text="Failed to send link, make sure the"
+                                                      " subreddit you requested exist!")
         return
 
     # Save the user last request
@@ -84,7 +79,8 @@ def random_post(bot, update, **kwargs): # pylint: disable=unused-argument
     posts = posts[1:]
 
     post_to_send = random.choice(posts)
-    bot.sendMessage(update.message.chat_id, text=post_to_send["title"] + "\n" + post_to_send["url"])
+    bot.send_message(update.message.chat_id,
+                     text=post_to_send["title"] + "\n" + post_to_send["url"])
 
 
 def help_command(bot, update):
@@ -99,21 +95,19 @@ def help_command(bot, update):
               "If you find any bugs or want to make a feature request just send me a message!\n" +\
               "Developer: @heylouiz\n" +\
               "Source code: https://github.com/heylouiz/randditbot.git"
-    bot.sendMessage(update.message.chat_id, text=message)
+    bot.send_message(update.message.chat_id, text=message)
 
 
-def error_handler(bot, update, error): # pylint: disable=unused-argument
+def error_handler(update, error):
     """ Log all errors """
 
-    LOGGER.warn('Update "%s" caused error "%s"', update, error) # pylint: disable=deprecated-method
+    LOGGER.warning('Update "%s" caused error "%s"', update, error)
 
 
-def any_message(bot, update): # pylint: disable=unused-argument
+def any_message(update, botan):
     """ Print to console and log activity with Botan.io """
 
-    botan.track(CONFIGURATION["botan_token"],
-                update.message.from_user.id,
-                update.message.to_dict(),
+    botan.track(update.message,
                 update.message.text.split(" ")[0])
 
     LOGGER.info("New message\nFrom: %s\nchat_id: %d\nText: %s",
@@ -125,21 +119,35 @@ def any_message(bot, update): # pylint: disable=unused-argument
 def main():
     """ Main function of the bot """
 
+    # Create a Botan tracker object
+    botan = Botan(CONFIGURATION["botan_token"])
+
+    # Last user request
+    last_request = {}
+
     # Create the EventHandler and pass it your bot's token.
     token = CONFIGURATION["telegram_token"]
     updater = Updater(token)
 
-    # Get the dispatcher to register handlers
-    dp = updater.dispatcher # pylint: disable=invalid-name
-
     # on different commands - answer in Telegram
-    dp.addTelegramRegexHandler('^\/r\/.*', random_post)  # pylint: disable=anomalous-backslash-in-string
-    dp.addTelegramRegexHandler('^/more.*', random_post)
-    dp.addTelegramRegexHandler('.*', any_message)
-    dp.addTelegramCommandHandler("help", help_command)
+    updater.dispatcher.add_handler(CommandHandler('help', help_command))
+    updater.dispatcher.add_handler(RegexHandler('/r/.*',
+                                                lambda bot, update: random_post(bot,
+                                                                                update,
+                                                                                last_request)))
+    updater.dispatcher.add_handler(CommandHandler('more',
+                                                  lambda bot, update: random_post(bot,
+                                                                                  update,
+                                                                                  last_request)))
+    updater.dispatcher.add_handler(RegexHandler('/r/.*',
+                                                lambda bot, update: any_message(update, botan)),
+                                   group=1)
+    updater.dispatcher.add_handler(CommandHandler('more',
+                                                  lambda bot, update: any_message(update, botan)),
+                                   group=1)
 
     # log all errors
-    dp.addErrorHandler(error_handler)
+    updater.dispatcher.add_error_handler(lambda bot, update, error: error_handler(update, error))
 
     # Start the Bot
     updater.start_polling()
